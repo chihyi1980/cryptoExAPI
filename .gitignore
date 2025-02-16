@@ -56,3 +56,5 @@ coverage.xml
 # Database
 *.db
 *.sqlite3
+
+config.py
