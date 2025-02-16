@@ -1,5 +1,6 @@
 import mysql.connector
 from mysql.connector import Error
+from config import Config
 
 class db(object):
     
@@ -11,11 +12,11 @@ class db(object):
     def connectDB(self):
         # 連接 MySQL/MariaDB 資料庫
         connection = mysql.connector.connect(
-            host='localhost',          # 主機名稱
+            host=Config.DB_HOST,          # 主機名稱
             #host='db-cont',          # 主機名稱
             database= self.dbName, # 資料庫名稱
-            user='root',        # 帳號
-            password='691121')  # 密碼
+            user=Config.DB_USER,        # 帳號
+            password=Config.DB_PWD)  # 密碼
         return connection
 
     def closeDBConn(self):

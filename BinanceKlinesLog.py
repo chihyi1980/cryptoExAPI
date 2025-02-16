@@ -13,8 +13,8 @@ def geneKlines(pair, startTime, endTime):
     pair = pair
     startTime = startTime
     endTime = endTime
-    interval = '1m'
-    limit = 1500
+    interval = '5m'
+    limit = 500
     obj = binance.getKlines(pair, startTime, endTime, interval, limit)
     return obj
 
@@ -25,7 +25,7 @@ def getAllDay(pair, date):
         data = dict()
         data['time'] = binance.ts2dateStr(item[0])
         data['pair'] =  pair
-        data['interval'] = '1m'
+        data['interval'] = '5m'
         data['start_price'] = item[1]
         data['high_price'] = item[2]
         data['low_price'] = item[3]
@@ -44,13 +44,16 @@ def genDateList(startDateStr, delta):
     return lstDate
 
 def start():
-    lstDate = genDateList('2021-05-24', 1)
+    lstDate = genDateList('2024-07-01', 184)
+
+    print(lstDate)
+
     lstPair = binance.getExchangeInfo()
     for dateStr in lstDate:
         for pair in lstPair:
             data = getAllDay(pair, dateStr)
-            #print(data)
+            print(data)
             db.insertBinanceKlines(data)
-            time.sleep(0.5)
+            time.sleep(1)
 
 start()

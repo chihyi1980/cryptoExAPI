@@ -2,13 +2,14 @@ import requests
 from utils.urlparamsbuilder import UrlParamsBuilder
 import json
 from datetime import datetime
+from config import Config
 
 class binanceAPI(object):
     
     def __init__(self):
-        self.host = 'https://fapi.binance.com'
-        self.api_key = '' #幣安api_key
-        self.secret_key = '' #幣安secret_key
+        self.host = Config.BINANCE_API_HOST
+        self.api_key = Config.BINANCE_API_KEY #幣安api_key
+        self.secret_key = Config.BINANCE_SECRET_KEY #幣安secret_key
 
     #timestemp 轉 '%Y-%m-%d %H:%M:%S'
     def ts2dateStr(self, ts):
