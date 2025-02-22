@@ -84,19 +84,23 @@ class binanceAPI(object):
             print(resp.text)
         return None
 
-    #获取交易对
-    def getExchangeInfo(self):
+    #获取交易对  永續合約 交易中 USDT 上架日期大於等於 onboardDateAfter
+    #依照上架日期排序，越新的越先
+    def getExchangeInfo(self, onboardDateAfter):
         url = self.host + '/fapi/v1/exchangeInfo'
-
         resp = requests.get(url)
-        if(resp.status_code == 200):
+        if resp.status_code == 200:
             obj = json.loads(resp.text)
-            lstPair = []
-            for p in obj['symbols']:
-                if p['contractType'] == 'PERPETUAL' :
-                    lstPair.append(p['symbol'])
+            pairs = [
+                p['symbol'] for p in obj['symbols']
+                if p['contractType'] == 'PERPETUAL'
+                and p['status'] == 'TRADING'
+                and p['quoteAsset'] == 'USDT'
+                and p['onboardDate'] >= onboardDateAfter
+            ]
+            sorted_pairs = sorted(pairs, key=lambda x: next(p['onboardDate'] for p in obj['symbols'] if p['symbol'] == x), reverse=True)
             resp.close()
-            return lstPair
+            return sorted_pairs
         else:
             print(resp.status_code)
             print(resp.text)

@@ -44,16 +44,18 @@ def genDateList(startDateStr, delta):
     return lstDate
 
 def start():
-    lstDate = genDateList('2024-07-01', 184)
+    lstDate = genDateList('2025-01-01', 31)
+    onboardDateAfter = binance.dateStr2ts('2024-10-01 00:00:00')  #幣安合約上線日期
+    lstPair = binance.getExchangeInfo(onboardDateAfter)
 
-    print(lstDate)
+    print(lstPair)
 
-    lstPair = binance.getExchangeInfo()
-    for dateStr in lstDate:
-        for pair in lstPair:
-            data = getAllDay(pair, dateStr)
-            print(data)
-            db.insertBinanceKlines(data)
-            time.sleep(1)
-
+    
+    # for dateStr in lstDate:
+    #     for pair in lstPair:
+    #         data = getAllDay(pair, dateStr)
+    #         print(data)
+    #         db.insertBinanceKlines(data)
+    #         time.sleep(0.3)
+    
 start()

@@ -103,17 +103,17 @@ class db(object):
         except Error as e:
             print('資料庫連接失敗：', e)
 
-    def queryBinanceKlines(self, pair, time):
+    def queryBinanceKlines(self, pair, startTime, endTime):
         try:
-            sql = 'SELECT trade_time,  pair, intr, start_price, high_price, low_price, end_price, volume, money FROM klines WHERE pair = %s and trade_time = %s'
-            val = (pair, time)
+            sql = 'SELECT trade_time,  pair, intr, start_price, high_price, low_price, end_price, volume, money FROM klines WHERE pair = %s and trade_time >= %s and trade_time <= %s'
+            val = (pair, startTime, endTime)
             cursor = self.conn.cursor()
             cursor.execute(sql, val)
-            row = cursor.fetchone()
-            if row is None:
-                return None
+            rows = cursor.fetchall()
+            if rows is None:
+                return []
             else:
-                return row
+                return rows
                 
         except Error as e:
             print('資料庫連接失敗：', e)   
@@ -121,3 +121,23 @@ class db(object):
         finally:
             if (self.conn.is_connected()):
                 cursor.close()    
+                
+    def queryBinanceKlinesPairList(self):
+        try:
+            sql = 'SELECT DISTINCT pair FROM klines'
+            cursor = self.conn.cursor()
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            if rows is None:
+                return []
+            else:
+                # Extract the first element from each tuple and return as a list
+                return [row[0] for row in rows]
+            
+        except Error as e:
+            print('資料庫連接失敗：', e)
+            return []
+
+        finally:
+            if (self.conn.is_connected()):
+                cursor.close()
