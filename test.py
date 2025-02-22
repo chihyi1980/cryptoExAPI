@@ -41,6 +41,7 @@ class TradingSimulator:
         self.trailing_stop = 0.0  # 追踪止損價格
         self.highest_price = 0.0  # 記錄最高價格
         self.lowest_price = float('inf')  # 記錄最低價格
+        self.trade_records = []  # 記錄交易
 
     def parse_time(self, time_str: str) -> datetime:
         """统一解析时间字符串为datetime对象"""
@@ -169,7 +170,7 @@ class TradingSimulator:
         # 根據持倉時間調整止損（3小時內從2倍逐漸收窄到1倍）
         if self.entry_time:
             current_dt = self.parse_time(current_time)
-            hours_held = (current_dt - self.entry_time).total_seconds() / 3600
+            hours_held = (current_dt - self.parse_time(self.entry_time)).total_seconds() / 3600
             if hours_held <= 3:
                 # 計算時間衰減因子（3小時內從2線性降至1）
                 time_factor = 1 + max(0, (3 - hours_held) / 3)
@@ -178,75 +179,213 @@ class TradingSimulator:
                 
         return stop_percentage
 
-    def should_close_position(self, current_time: str, current_price: float, current_volume: float, past_24h_records: List[Dict], past_records: List[Dict]) -> bool:
-        """判斷是否應該平倉
-        
-        Returns:
-            bool: 是否平倉
-        """
-        if not self.position:
+    def should_close_position(self, time: str, current_price: float, current_volume: float, past_24h_records: List[Dict], past_records: List[Dict]) -> bool:
+        """判斷是否應該平倉"""
+        current_time = self.parse_time(time)
+        entry_time = self.parse_time(self.entry_time) if self.entry_time else None
+
+        if not entry_time:
             return False
-            
-        # 檢查最小持倉時間
-        current_dt = self.parse_time(current_time)
-        if current_dt - self.entry_time < self.min_hold_time:
-            return False
-            
-        # 檢查單次交易虧損是否超過5%
-        current_pnl = self.calculate_pnl(current_price)
-        current_loss_percentage = abs(current_pnl) / self.capital if current_pnl < 0 else 0
-        
-        # 如果虧損超過4.5%，記錄警告
-        if current_loss_percentage > 0.045:
-            # 找到上一根K線的資訊
-            if past_records and len(past_records) >= 2:
-                prev_kline = past_records[-2]  # 取得上一根K線
-                prev_close = float(prev_kline['end_price'])
-                prev_pnl = self.calculate_pnl(prev_close)
-                prev_loss_percentage = abs(prev_pnl) / self.capital if prev_pnl < 0 else 0
-                
-                print(f"\n====== 接近強制平倉的警告 ======")
-                print(f"交易對: {self.symbol}")
-                print(f"當前時間: {current_time}")
-                print(f"上一根K線時間: {prev_kline['time']}")
-                print(f"上一根K線開盤價: {prev_kline['start_price']}")
-                print(f"上一根K線最高價: {prev_kline['high_price']}")
-                print(f"上一根K線最低價: {prev_kline['low_price']}")
-                print(f"上一根K線收盤價: {prev_kline['end_price']}")
-                print(f"上一根K線成交量: {prev_kline['volume']}")
-                print(f"上一根K線虧損百分比: {prev_loss_percentage*100:.2f}%")
-                print(f"當前價格: {current_price}")
-                print(f"當前虧損百分比: {current_loss_percentage*100:.2f}%")
-                print("=====================================\n")
-            else:
-                print(f"\n警告：無法獲取 {self.symbol} 的上一根K線資訊")
-                print(f"當前時間: {current_time}")
-                print(f"當前價格: {current_price}")
-                print(f"當前虧損: {current_loss_percentage*100:.2f}%")
-                print(f"past_records 長度: {len(past_records) if past_records else 0}\n")
-        
-        # 如果虧損超過5%，強制平倉
-        if current_loss_percentage > 0.05:
+
+        # 計算持倉時間（小時）
+        hours_held = (current_time - entry_time).total_seconds() / 3600
+
+        # 檢查持倉時間是否超過3小時
+        if hours_held > 3:
+            with open('warnings.txt', 'a', encoding='utf-8') as f:
+                f.write(f"\n====== 持倉時間超過3小時，強制平倉 ======\n")
+                f.write(f"開倉時間: {self.entry_time}\n")
+                f.write(f"當前時間: {time}\n")
+                f.write(f"持倉時間: {hours_held:.2f} 小時\n")
+                f.write("=====================================\n")
             return True
-            
-        # 更新最高價和最低價
-        self.update_price_extremes(current_price)
-        
-        # 計算動態止損百分比
-        stop_percentage = self.calculate_dynamic_stop_loss(current_price, current_time, past_records)
-        
-        # 根據倉位方向判斷止損
-        if self.position == Position.LONG:
-            # 計算從最高點回落的百分比
-            drawdown = (self.highest_price - current_price) / self.highest_price
-            return drawdown >= stop_percentage
-            
-        elif self.position == Position.SHORT:
-            # 計算從最低點反彈的百分比
-            pullback = (current_price - self.lowest_price) / self.lowest_price
-            return pullback >= stop_percentage
-            
+
+        # 計算當前倉位的盈虧
+        pnl = self.calculate_pnl(current_price)
+        loss_percentage = abs(pnl) / self.capital
+
+        # 3小時內止損從5%線性收窄到0%
+        max_loss_percentage = 0.05 * (1 - hours_held / 3)
+
+        # 如果虧損超過動態止損線，平倉
+        if loss_percentage > max_loss_percentage:
+            with open('warnings.txt', 'a', encoding='utf-8') as f:
+                f.write(f"\n====== 虧損超過動態止損線，平倉 ======\n")
+                f.write(f"持倉時間: {hours_held:.2f} 小時\n")
+                f.write(f"當前虧損比例: {loss_percentage:.2%}\n")
+                f.write(f"動態止損線: {max_loss_percentage:.2%}\n")
+                f.write("=====================================\n")
+            return True
+
+        # 如果虧損超過5%，強制平倉（這是最大止損線）
+        if loss_percentage > 0.05:
+            return True
+
         return False
+
+    def process_price(self, time: str, current_price: float, current_volume: float, past_24h_records: List[Dict], past_records: List[Dict]):
+        """處理每個價格點"""
+        current_time = self.parse_time(time)
+
+        # 檢查是否已超過第一筆交易後的30天
+        if self.first_trade_time is not None:
+            first_trade_dt = self.parse_time(self.first_trade_time)
+            if current_time - first_trade_dt > timedelta(days=30):
+                return
+                
+        # 如果有持倉，檢查是否需要平倉
+        if self.position != Position.NONE:
+            if self.should_close_position(time, current_price, current_volume, past_24h_records, past_records):
+                # 獲取上一根K線信息
+                prev_kline_info = ""
+                if past_records:
+                    # 將當前時間轉換為datetime
+                    current_dt = datetime.strptime(time, "%Y-%m-%dT%H:%M:%S")
+                    # 計算前一個5分鐘K線的時間
+                    prev_kline_time = (current_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
+                    
+                    # 在past_records中尋找這個時間的K線
+                    for record in past_records:
+                        if record['time'] == prev_kline_time:
+                            prev_kline = record
+                            prev_kline_info = f"\n上一根K線信息：\n"
+                            prev_kline_info += f"時間: {prev_kline['time']}\n"
+                            prev_kline_info += f"開盤價: {prev_kline['start_price']}\n"
+                            prev_kline_info += f"最高價: {prev_kline['high_price']}\n"
+                            prev_kline_info += f"最低價: {prev_kline['low_price']}\n"
+                            prev_kline_info += f"收盤價: {prev_kline['end_price']}\n"
+                            prev_kline_info += f"成交量: {prev_kline['volume']}\n"
+                            break
+                    else:
+                        # 如果找不到前一個5分鐘K線，記錄警告
+                        with open('warnings.txt', 'a', encoding='utf-8') as f:
+                            f.write(f"\n警告：在past_records中找不到時間為 {prev_kline_time} 的K線\n")
+                            f.write(f"當前時間: {time}\n")
+                            f.write(f"past_records中的時間序列：\n")
+                            for record in past_records:
+                                f.write(f"{record['time']}\n")
+                
+                # 計算盈虧
+                pnl = self.calculate_pnl(current_price)
+                self.total_pnl += pnl
+                
+                # 更新資金
+                self.capital += pnl
+                
+                # 記錄交易
+                trade_record = f"時間: {time:<20} | 價格: {current_price:8.4f} | 操作: 平倉   | 倉位: {self.position.value:<8} | 倉位大小: {self.position_size:10.4f} | 當次盈虧: {pnl:10.4f}"
+                if prev_kline_info:
+                    trade_record += prev_kline_info
+                self.trade_records.append(trade_record)
+                
+                # 記錄強制平倉的調試資訊
+                if abs(pnl) / self.capital > 0.05:  # 如果是強制平倉
+                    with open('warnings.txt', 'a', encoding='utf-8') as f:
+                        f.write(f"\n====== 強制平倉事件 ======\n")
+                        f.write(f"時間: {time}\n")
+                        f.write(f"倉位: {self.position.value}\n")
+                        f.write(f"開倉價格: {self.entry_price}\n")
+                        f.write(f"平倉價格: {current_price}\n")
+                        f.write(f"倉位大小: {self.position_size}\n")
+                        f.write(f"虧損金額: {pnl}\n")
+                        f.write(f"虧損百分比: {abs(pnl) / self.capital * 100:.2f}%\n")
+                        f.write(f"剩餘資金: {self.capital}\n")
+                        f.write("==========================\n")
+                
+                # 重置倉位相關變量
+                self.position = Position.NONE
+                self.position_size = 0
+                self.entry_price = 0
+                self.entry_time = None
+                self.highest_price = 0
+                self.lowest_price = float('inf')
+                self.last_trade_time = current_time
+                return
+                
+        # 如果沒有持倉，檢查是否要開倉
+        else:
+            # 檢查交易次數限制
+            if not self.can_trade_today(time):
+                return
+                
+            # 檢查是否已超過第一筆交易後的30天
+            if self.first_trade_time is not None:
+                first_trade_dt = self.parse_time(self.first_trade_time)
+                if current_time - first_trade_dt > timedelta(days=30):
+                    return
+                    
+            # 計算15分钟价格变化
+            price_change_15min = self.calculate_15min_price_change(current_price, past_records)
+            
+            # 計算交易量條件
+            recent_volume_avg = self.calculate_recent_volume_average(past_records, 15)  # 計算最近15分鐘平均交易量
+            h24_volume_avg = self.calculate_recent_volume_average(past_24h_records, 24)  # 計算24小時平均交易量
+            
+            # 避免除以零的情況
+            volume_ratio = 0
+            if h24_volume_avg > 0:
+                volume_ratio = recent_volume_avg / h24_volume_avg  # 與24小時平均交易量比較
+            
+            # 开仓条件：过去15分钟上涨3%，且最近15分钟交易量是24小时平均的1.5倍以上
+            if price_change_15min >= 0.03 and volume_ratio >= 1.2:  # 15分钟内上涨3%且交易量条件满足，做多
+                # 更新每日交易次數
+                self.update_daily_trades(time)
+                
+                # 計算倉位大小和止損點
+                stop_loss = current_price * (1 - self.calculate_dynamic_stop_loss(current_price, time, past_records))
+                position_size = self.calculate_position_size(current_price, stop_loss)
+                
+                # 檢查是否有足夠資金開倉
+                position_value = position_size * current_price
+                if position_value > self.capital:
+                    return
+                    
+                # 記錄開倉信息
+                self.position = Position.LONG
+                self.position_size = position_size
+                self.entry_price = current_price
+                self.entry_time = time
+                self.highest_price = current_price
+                self.lowest_price = current_price
+                
+                # 記錄交易
+                self.trade_records.append(
+                    f"時間: {time:<20} | 價格: {current_price:8.4f} | 操作: 開倉   | 倉位: {self.position.value:<8} | 倉位大小: {self.position_size:10.4f} | 當次盈虧: {0:10.4f}"
+                )
+                
+                # 如果是第一筆交易，記錄時間
+                if self.first_trade_time is None:
+                    self.first_trade_time = time
+                    
+            elif price_change_15min <= -0.03 and volume_ratio >= 1.2:  # 15分钟内下跌3%且交易量条件满足，做空
+                # 更新每日交易次數
+                self.update_daily_trades(time)
+                
+                # 計算倉位大小和止損點
+                stop_loss = current_price * (1 + self.calculate_dynamic_stop_loss(current_price, time, past_records))
+                position_size = self.calculate_position_size(current_price, stop_loss)
+                
+                # 檢查是否有足夠資金開倉
+                position_value = position_size * current_price
+                if position_value > self.capital:
+                    return
+                    
+                # 記錄開倉信息
+                self.position = Position.SHORT
+                self.position_size = position_size
+                self.entry_price = current_price
+                self.entry_time = time
+                self.highest_price = current_price
+                self.lowest_price = current_price
+                
+                # 記錄交易
+                self.trade_records.append(
+                    f"時間: {time:<20} | 價格: {current_price:8.4f} | 操作: 開倉   | 倉位: {self.position.value:<8} | 倉位大小: {self.position_size:10.4f} | 當次盈虧: {0:10.4f}"
+                )
+
+                # 如果是第一筆交易，記錄時間
+                if self.first_trade_time is None:
+                    self.first_trade_time = time
 
     def calculate_hour_average_price(self, past_records: List[Dict]) -> float:
         """計算過去一小時的平均價格"""
@@ -323,135 +462,6 @@ class TradingSimulator:
                     
         return max_change
 
-    def process_price(self, time: str, current_price: float, current_volume: float, past_24h_records: List[Dict], past_records: List[Dict]):
-        """處理每個價格點"""
-        current_time = self.parse_time(time)
-
-        # 檢查是否已超過第一筆交易後的30天
-        if self.first_trade_time is not None:
-            if current_time - self.first_trade_time > timedelta(days=30):
-                return
-                
-        # 如果有持倉，檢查是否需要平倉
-        if self.position != Position.NONE:
-            if self.should_close_position(time, current_price, current_volume, past_24h_records, past_records):
-                # 計算盈虧
-                pnl = self.calculate_pnl(current_price)
-                self.total_pnl += pnl
-                
-                # 更新資金
-                self.capital += pnl
-                
-                # 記錄交易
-                self.trades.append(Trade(
-                    time=time,
-                    price=current_price,
-                    action="平倉",
-                    position=self.position,
-                    size=self.position_size,
-                    pnl=pnl
-                ))
-                
-                # 重置持倉相關變量
-                self.position = Position.NONE
-                self.position_size = 0.0
-                self.entry_price = 0.0
-                self.entry_time = None
-                self.highest_price = 0.0
-                self.lowest_price = float('inf')
-                self.last_trade_time = current_time
-                return
-
-        # 如果沒有持倉，檢查是否要開倉
-        else:
-            # 檢查交易次數限制
-            if not self.can_trade_today(time):
-                return
-                
-            # 檢查是否已超過第一筆交易後的30天
-            if self.first_trade_time is not None:
-                if current_time - self.first_trade_time > timedelta(days=30):
-                    return
-                    
-            # 計算15分钟价格变化
-            price_change_15min = self.calculate_15min_price_change(current_price, past_records)
-            
-            # 計算交易量條件
-            recent_volume_avg = self.calculate_recent_volume_average(past_records, 15)  # 計算最近15分鐘平均交易量
-            h24_volume_avg = self.calculate_recent_volume_average(past_24h_records, 24)  # 計算24小時平均交易量
-            
-            # 避免除以零的情況
-            volume_ratio = 0
-            if h24_volume_avg > 0:
-                volume_ratio = recent_volume_avg / h24_volume_avg  # 與24小時平均交易量比較
-            
-            # 开仓条件：过去15分钟上涨3%，且最近15分钟交易量是24小时平均的1.5倍以上
-            if price_change_15min >= 0.03 and volume_ratio >= 1.2:  # 15分钟内上涨3%且交易量条件满足，做多
-                # 更新每日交易次數
-                self.update_daily_trades(time)
-                
-                # 計算倉位大小和止損點
-                stop_loss = current_price * (1 - self.calculate_dynamic_stop_loss(current_price, time, past_records))
-                position_size = self.calculate_position_size(current_price, stop_loss)
-                
-                # 檢查是否有足夠資金開倉
-                position_value = position_size * current_price
-                if position_value > self.capital:
-                    return
-                    
-                # 記錄開倉信息
-                self.position = Position.LONG
-                self.position_size = position_size
-                self.entry_price = current_price
-                self.entry_time = current_time
-                
-                # 記錄交易
-                self.trades.append(Trade(
-                    time=time,
-                    price=current_price,
-                    action="開倉",
-                    position=Position.LONG,
-                    size=position_size,
-                    pnl=0.0
-                ))
-                
-                # 如果是第一筆交易，記錄時間
-                if self.first_trade_time is None:
-                    self.first_trade_time = current_time
-                    
-            elif price_change_15min <= -0.03 and volume_ratio >= 1.2:  # 15分钟内下跌3%且交易量条件满足，做空
-                # 更新每日交易次數
-                self.update_daily_trades(time)
-                
-                # 計算倉位大小和止損點
-                stop_loss = current_price * (1 + self.calculate_dynamic_stop_loss(current_price, time, past_records))
-                position_size = self.calculate_position_size(current_price, stop_loss)
-                
-                # 檢查是否有足夠資金開倉
-                position_value = position_size * current_price
-                if position_value > self.capital:
-                    return
-                    
-                # 記錄開倉信息
-                self.position = Position.SHORT
-                self.position_size = position_size
-                self.entry_price = current_price
-                self.entry_time = current_time
-                
-                # 記錄交易
-                self.trades.append(Trade(
-                    time=time,
-                    price=current_price,
-                    action="開倉",
-                    position=Position.SHORT,
-                    size=position_size,
-                    pnl=0.0
-                ))
-
-                # 如果是第一筆交易，記錄時間
-                if self.first_trade_time is None:
-                    self.first_trade_time = current_time
-
 def main():
     # 連接數據庫
     db_conn = db('binance')
@@ -462,7 +472,7 @@ def main():
     
     # 要分析的交易對
     # pairs = ['SHELLUSDT', 'GPSUSDT', 'IPUSDT', 'B3USDT', 'HEIUSDT', 'LAYERUSDT', 'TSTUSDT', 'BERAUSDT', 'VVVUSDT', 'PIPPINUSDT', 'VINEUSDT', 'ANIMEUSDT', 'VTHOUSDT', 'MELANIAUSDT', 'TRUMPUSDT', 'AVAAIUSDT', 'ARCUSDT', 'SOLVUSDT', 'SUSDT', 'PROMUSDT', 'DUSDT', 'SONICUSDT', 'SWARMSUSDT', 'ALCHUSDT', 'COOKIEUSDT', 'BIOUSDT', 'ZEREBROUSDT', 'AI16ZUSDT', 'GRIFFAINUSDT', 'DFUSDT', 'PHAUSDT', 'DEXEUSDT', 'HIVEUSDT', 'CGPTUSDT', 'KMNOUSDT', 'FARTCOINUSDT', 'AIXBTUSDT', 'USUALUSDT', 'LUMIAUSDT', 'PENGUUSDT', 'VANAUSDT', 'MOCAUSDT', 'VELODROMEUSDT', 'DEGOUSDT', 'AVAUSDT', 'MEUSDT', 'SPXUSDT', 'VIRTUALUSDT', 'KOMAUSDT', 'RAYSOLUSDT', 'MOVEUSDT', 'ACXUSDT', 'ORCAUSDT', 'AEROUSDT', 'KAIAUSDT', 'CHILLGUYUSDT', 'MORPHOUSDT', 'THEUSDT', '1000CHEEMSUSDT', '1000WHYUSDT', 'SLERFUSDT', 'SCRTUSDT', 'BANUSDT', 'AKTUSDT', 'DEGENUSDT', 'HIPPOUSDT', '1000XUSDT', 'ACTUSDT', 'PNUTUSDT', 'DRIFTUSDT', 'SWELLUSDT', 'GRASSUSDT', '1000000MOGUSDT', 'CETUSUSDT', 'COWUSDT', 'PONKEUSDT', 'TROYUSDT', 'SANTOSUSDT', 'SAFEUSDT', 'MOODENGUSDT', 'GOATUSDT', 'SCRUSDT', '1000CATUSDT', 'DIAUSDT', 'EIGENUSDT']
-    pairs = ['MOCAUSDT']
+    pairs = ['1000CATUSDT']
     
     # 開啟輸出文件
     with open('out.txt', 'w', encoding='utf-8') as f:
@@ -504,8 +514,18 @@ def main():
                         break
                     past_24h_records.insert(0, record)  # 保持時間順序
                 
-                # 獲取用於趨勢分析的記錄（保持原有邏輯）
-                past_records = sorted_records[:i]
+                # 獲取用於趨勢分析的記錄（最近100根K線）
+                start_idx = max(0, i - 100)  # 最多取最近100根K線
+                past_records = sorted_records[start_idx:i]
+                
+                # 添加調試資訊
+                if i > 0 and i % 100 == 0:  # 每100個記錄輸出一次狀態
+                    print(f"\n====== 數據狀態檢查 ======")
+                    print(f"當前處理到第 {i} 條記錄")
+                    print(f"當前時間: {current_time}")
+                    print(f"past_records 長度: {len(past_records)}")
+                    print(f"past_24h_records 長度: {len(past_24h_records)}")
+                    print("============================\n")
                 
                 # 處理當前價格
                 simulator.process_price(current_time, current_price, current_volume, past_24h_records, past_records)
@@ -533,10 +553,8 @@ def main():
             # 寫入所有交易
             f.write("交易記錄：\n")
             f.write("-" * 100 + "\n")
-            for trade in simulator.trades:
-                f.write(f"時間: {trade.time:<25} | 價格: {trade.price:>8.4f} | "
-                       f"操作: {trade.action:<4} | 倉位: {trade.position.value:<4} | "
-                       f"倉位大小: {trade.size:>10.4f} | 當次盈虧: {trade.pnl:>10.4f}\n")
+            for trade in simulator.trade_records:
+                f.write(trade + "\n")
             
             f.write("\n" + "=" * 100 + "\n\n")
         
